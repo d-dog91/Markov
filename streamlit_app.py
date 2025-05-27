@@ -35,9 +35,9 @@ unique_times = sorted(timestamp_bin.unique())
 
 selected_time = st.sidebar.slider(
     "Show data up to:",
-    min_value=unique_times[0],
-    max_value=unique_times[-1],
-    value=unique_times[-1],
+    min_value=df_full["timestamp"].min().to_pydatetime(),
+    max_value=df_full["timestamp"].max().to_pydatetime(),
+    value=df_full["timestamp"].max().to_pydatetime(),
     format="YYYY-MM-DD HH:mm"
 )
 
