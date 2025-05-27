@@ -1,14 +1,13 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import requests
-from datetime import datetime
 
-# --- Config ---
-st.set_page_config(page_title="Guess Tracker", layout="wide")
+# --- Page config ---
+st.set_page_config(page_title="Guess Explorer", layout="wide")
 
-# --- Load data from Firebase ---
-@st.cache_data(ttl=300)
+# --- Load data ---
+@st.cache_data(ttl=600)
 def load_data():
     url = "https://markov-chains-default-rtdb.firebaseio.com/guesses.json"
     response = requests.get(url)
@@ -25,23 +24,18 @@ def load_data():
 df_full = load_data()
 
 # --- Sidebar controls ---
-st.sidebar.header("Filter Options")
+st.sidebar.header("Filter Controls")
 
-# Time slider
-min_time = df_full["timestamp"].min()
-max_time = df_full["timestamp"].max()
-timestamp_bin = df_full["timestamp"].dt.floor("min")
-unique_times = sorted(timestamp_bin.unique())
-
+min_time = df_full["timestamp"].min().to_pydatetime()
+max_time = df_full["timestamp"].max().to_pydatetime()
 selected_time = st.sidebar.slider(
-    "Show data up to:",
-    min_value=df_full["timestamp"].min().to_pydatetime(),
-    max_value=df_full["timestamp"].max().to_pydatetime(),
-    value=df_full["timestamp"].max().to_pydatetime(),
+    "Only show guesses made before:",
+    min_value=min_time,
+    max_value=max_time,
+    value=max_time,
     format="YYYY-MM-DD HH:mm"
 )
 
-# --- Filter data ---
 df_filtered = df_full[df_full["timestamp"] <= selected_time]
 df_filtered = df_filtered[
     (df_filtered["guess"] > 10) &
@@ -49,68 +43,68 @@ df_filtered = df_filtered[
     (~df_filtered["guess"].isin({69, 420, 80085}))
 ]
 
-# --- Calculate frequency ---
-guess_range = range(1, 5000)
-solo_counts = df_filtered[df_filtered["version"] == "solo"]["guess"].value_counts().reindex(guess_range, fill_value=0)
-social_counts = df_filtered[df_filtered["version"] == "social"]["guess"].value_counts().reindex(guess_range, fill_value=0)
+# --- Frequency counts ---
+solo_counts = df_filtered[df_filtered["version"] == "solo"]["guess"].value_counts().sort_index()
+social_counts = df_filtered[df_filtered["version"] == "social"]["guess"].value_counts().sort_index()
 
-freq_df = pd.DataFrame({
-    "guess": guess_range,
-    "solo": solo_counts.values,
-    "social": social_counts.values
-})
-freq_df["total"] = freq_df["solo"] + freq_df["social"]
+# --- Plot ---
+st.title("Guess Frequency Explorer")
 
-# --- Main plot ---
-st.title("Guess Frequency Over Time")
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=solo_counts.index,
+    y=solo_counts.values,
+    mode='lines',
+    name='Solo',
+    line=dict(color='blue')
+))
+fig.add_trace(go.Scatter(
+    x=social_counts.index,
+    y=social_counts.values,
+    mode='lines',
+    name='Social',
+    line=dict(color='orange')
+))
 
-fig, ax = plt.subplots(figsize=(14, 6))
-ax.plot(freq_df["guess"], freq_df["solo"], label="Solo", linewidth=2)
-ax.plot(freq_df["guess"], freq_df["social"], label="Social", linewidth=2, alpha=0.6)
+# Label top 10 combined peaks
+combined_counts = solo_counts.add(social_counts, fill_value=0)
+top_peaks = combined_counts.nlargest(10)
+for guess, freq in top_peaks.items():
+    y_val = max(solo_counts.get(guess, 0), social_counts.get(guess, 0))
+    fig.add_annotation(x=guess, y=y_val + 2, text=str(int(guess)), showarrow=False, font=dict(size=10))
 
-# Label top 10
-top_peaks = freq_df.nlargest(10, "total")
-for _, row in top_peaks.iterrows():
-    guess = row["guess"]
-    solo_val = row["solo"]
-    social_val = row["social"]
-    y = max(solo_val, social_val)
-    color = 'blue' if solo_val >= social_val else 'orange'
-    ax.text(guess, y + 1, f"{int(guess)}", ha="center", va="bottom", fontsize=9, color=color)
+fig.update_layout(
+    xaxis_title='Guess',
+    yaxis_title='Frequency',
+    title='Frequency of Guesses (Solo vs Social)',
+    hovermode='x unified',
+    height=500,
+    margin=dict(t=50, l=50, r=50, b=50)
+)
+st.plotly_chart(fig, use_container_width=True)
 
-ax.set_xlabel("Guess")
-ax.set_ylabel("Frequency")
-ax.set_title("Solo vs Social Guess Frequencies")
-ax.grid(True)
-ax.legend()
-ax.set_xticks(range(0, 5001, 250))
-st.pyplot(fig)
-
-# --- Mean display ---
+# --- Means ---
 mean_solo = round(df_filtered[df_filtered["version"] == "solo"]["guess"].mean())
 mean_social = round(df_filtered[df_filtered["version"] == "social"]["guess"].mean())
 st.markdown(f"### Mean Solo Guess: {mean_solo}  \nMean Social Guess: {mean_social}")
 
-# --- Guess checker ---
-st.markdown("### Check Frequency of a Specific Guess")
-guess_check = st.number_input("Enter guess to check:", min_value=0, step=1)
-if st.button("Check Guess"):
-    solo_freq = df_filtered[(df_filtered["version"] == "solo") & (df_filtered["guess"] == guess_check)].shape[0]
-    social_freq = df_filtered[(df_filtered["version"] == "social") & (df_filtered["guess"] == guess_check)].shape[0]
-    st.write(f"**Guess {guess_check}** → Solo: {solo_freq}, Social: {social_freq}")
+# --- Guess Checker ---
+st.markdown("### Check a Specific Guess")
+with st.form("check_guess_form"):
+    user_guess = st.number_input("Enter a guess to check:", min_value=0, step=1)
+    submitted = st.form_submit_button("Check Guess")
+    if submitted:
+        solo_match = df_filtered[(df_filtered["version"] == "solo") & (df_filtered["guess"] == user_guess)].shape[0]
+        social_match = df_filtered[(df_filtered["version"] == "social") & (df_filtered["guess"] == user_guess)].shape[0]
+        st.success(f"Guess {user_guess} appeared {solo_match} times in Solo and {social_match} times in Social.")
 
-# --- Top guesses toggle ---
-if st.toggle("Show Top 10 Guesses"):
-    top_solo = (
-        df_filtered[df_filtered["version"] == "solo"]["guess"]
-        .value_counts().nlargest(10)
-        .reset_index().rename(columns={"index": "Guess", "guess": "Solo Frequency"})
-    )
-    top_social = (
-        df_filtered[df_filtered["version"] == "social"]["guess"]
-        .value_counts().nlargest(10)
-        .reset_index().rename(columns={"index": "Guess", "guess": "Social Frequency"})
-    )
-    top_combined = pd.concat([top_solo, top_social], axis=1)
-    st.markdown("### Top 10 Guesses")
-    st.dataframe(top_combined)
+# --- Top Guesses ---
+with st.expander("📊 Show Top 10 Most Frequent Guesses"):
+    top_solo = df_filtered[df_filtered["version"] == "solo"]["guess"].value_counts().nlargest(10).reset_index()
+    top_solo.columns = ["Guess", "Solo Frequency"]
+
+    top_social = df_filtered[df_filtered["version"] == "social"]["guess"].value_counts().nlargest(10).reset_index()
+    top_social.columns = ["Guess", "Social Frequency"]
+
+    combined_top = pd.concat([top_solo, top_social], axis=1)
+    st.dataframe(combined_top)
